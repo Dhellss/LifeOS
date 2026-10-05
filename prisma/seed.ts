@@ -8,7 +8,7 @@
  * Run with: npm run db:seed
  */
 import { PrismaClient, type Prisma } from '@prisma/client';
-import { hashPassword } from 'better-auth/crypto';
+import { hashPassword, verifyPassword } from 'better-auth/crypto';
 
 import {
   habitCheckinAward,
@@ -75,15 +75,6 @@ async function main() {
       email: DEMO_EMAIL,
       emailVerified: true,
       createdAt: daysAgo(120),
-      accounts: {
-        create: {
-          // Hashed with Better Auth's own helper so the seeded demo account
-          // signs in through the normal login form.
-          accountId: DEMO_EMAIL,
-          providerId: 'credential',
-          password: await hashPassword(DEMO_PASSWORD),
-        },
-      },
       preferences: {
         create: {
           timezone: 'Europe/Berlin',
@@ -93,6 +84,24 @@ async function main() {
           weeklyWorkoutGoal: 4,
         },
       },
+    },
+  });
+
+  // The credential account is created separately because `accountId` must be
+  // the user's own id, which only exists once the user row has been written.
+  // Better Auth looks the credential up with
+  //   accounts.find(a => a.providerId === 'credential' && a.accountId === user.id)
+  // so an accountId of anything else (the email, say) leaves the account
+  // invisible and sign-in fails with "User not found" even though the user and
+  // a valid password hash are both present.
+  await prisma.account.create({
+    data: {
+      userId: user.id,
+      accountId: user.id,
+      providerId: 'credential',
+      // Hashed with Better Auth's own helper, so the seeded demo account signs
+      // in through the normal login form.
+      password: await hashPassword(DEMO_PASSWORD),
     },
   });
   console.log(`  user: ${user.email}`);
@@ -721,8 +730,45 @@ async function main() {
   const unlocked = await syncAchievements(user.id);
   console.log(`  achievements unlocked: ${unlocked.length}`);
 
+  await assertDemoAccountCanSignIn();
+
   console.log('\n✓ Seed complete');
   console.log(`  Sign in with ${DEMO_EMAIL} / ${DEMO_PASSWORD}`);
+}
+
+/**
+ * Verify the demo account is actually usable before declaring success.
+ *
+ * The seed writes the credential row by hand rather than going through Better
+ * Auth, so it can drift from what Better Auth expects without anything
+ * failing: the rows look perfectly reasonable, and the only symptom is a login
+ * form that rejects the documented demo password. This replicates Better
+ * Auth's own lookup and password check so that drift fails the seed loudly
+ * instead of surfacing as a confusing "wrong password".
+ */
+async function assertDemoAccountCanSignIn(): Promise<void> {
+  const record = await prisma.user.findUnique({
+    where: { email: DEMO_EMAIL },
+    include: { accounts: true },
+  });
+
+  const credential = record?.accounts.find(
+    (account) => account.providerId === 'credential' && account.accountId === record.id,
+  );
+
+  if (!record || !credential?.password) {
+    throw new Error(
+      'Seeded demo account would not be able to sign in: no credential account ' +
+        `with accountId === user.id for ${DEMO_EMAIL}. Better Auth matches the ` +
+        'credential on that field, so it must hold the user id.',
+    );
+  }
+
+  if (!(await verifyPassword({ hash: credential.password, password: DEMO_PASSWORD }))) {
+    throw new Error('Seeded demo account password does not verify against its stored hash.');
+  }
+
+  console.log('  verified: the demo account can sign in');
 }
 
 main()
