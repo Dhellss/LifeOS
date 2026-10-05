@@ -1,0 +1,392 @@
+// LifeOS database schema
+// ---------------------------------------------------------------------------
+// Relational model for a single-tenant-per-user personal operating system.
+// Every domain table carries a `userId` FK so that ownership can be enforced
+// at the service layer with a single scoped `where` clause.
+//
+// Docs: ../docs/DATABASE.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+  ARCHIVED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum ProjectStatus {
+  ACTIVE
+  PAUSED
+  COMPLETED
+  ARCHIVED
+}
+
+enum HabitFrequency {
+  DAILY
+  WEEKLY
+}
+
+enum CalendarEventType {
+  TASK
+  STUDY
+  FITNESS
+  PERSONAL
+  PROJECT
+  OTHER
+}
+
+enum Mood {
+  GREAT
+  GOOD
+  NEUTRAL
+  LOW
+  BAD
+}
+
+/// Source of an XP award. Used for analytics breakdowns and for guarding
+/// against duplicate awards together with `XPEvent.dedupeKey`.
+enum XPEventType {
+  TASK_COMPLETED
+  PROJECT_COMPLETED
+  HABIT_CHECKIN
+  STUDY_SESSION
+  WORKOUT_LOGGED
+  JOURNAL_ENTRY
+  ACHIEVEMENT_UNLOCKED
+}
+
+// ---------------------------------------------------------------------------
+// Auth (Better Auth core tables)
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String   @id @default(cuid())
+  name          String
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  image         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Auth relations
+  sessions Session[]
+  accounts Account[]
+
+  // Domain relations
+  tasks          Task[]
+  projects       Project[]
+  habits         Habit[]
+  habitLogs      HabitLog[]
+  studySessions  StudySession[]
+  workouts       Workout[]
+  calendarEvents CalendarEvent[]
+  journalEntries JournalEntry[]
+  xpEvents       XPEvent[]
+  achievements   UserAchievement[]
+  preferences    UserPreferences?
+
+  @@map("user")
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("session")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  /// Hashed password for the credentials provider. Never a plaintext value.
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+  @@map("account")
+}
+
+model Verification {
+  id         String   @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+  @@map("verification")
+}
+
+/// Per-user application settings. One row per user, created lazily.
+model UserPreferences {
+  id                String   @id @default(cuid())
+  userId            String   @unique
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// IANA timezone name, e.g. "Europe/Berlin". Used for "today" boundaries.
+  timezone          String   @default("UTC")
+  /// 0 = Sunday, 1 = Monday. Drives weekly analytics buckets.
+  weekStartsOn      Int      @default(1)
+  dailyTaskGoal     Int      @default(5)
+  weeklyStudyGoal   Int      @default(600)
+  weeklyWorkoutGoal Int      @default(3)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@map("user_preferences")
+}
+
+// ---------------------------------------------------------------------------
+// Productivity
+// ---------------------------------------------------------------------------
+
+model Project {
+  id          String        @id @default(cuid())
+  userId      String
+  user        User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  status      ProjectStatus @default(ACTIVE)
+  color       String?
+  startDate   DateTime?
+  targetDate  DateTime?
+  completedAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  tasks Task[]
+
+  @@index([userId, status])
+  @@index([userId, createdAt])
+  @@map("project")
+}
+
+model Task {
+  id          String       @id @default(cuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId   String?
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  title       String
+  description String?
+  status      TaskStatus   @default(TODO)
+  priority    TaskPriority @default(MEDIUM)
+  dueDate     DateTime?
+  completedAt DateTime?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  @@index([userId, status])
+  @@index([userId, dueDate])
+  @@index([userId, completedAt])
+  @@index([projectId])
+  @@map("task")
+}
+
+// ---------------------------------------------------------------------------
+// Habits
+// ---------------------------------------------------------------------------
+
+model Habit {
+  id          String         @id @default(cuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name        String
+  description String?
+  frequency   HabitFrequency @default(DAILY)
+  targetCount Int            @default(1)
+  color       String?
+  isActive    Boolean        @default(true)
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  logs HabitLog[]
+
+  @@index([userId, isActive])
+  @@map("habit")
+}
+
+model HabitLog {
+  id        String   @id @default(cuid())
+  habitId   String
+  habit     Habit    @relation(fields: [habitId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Normalised to UTC midnight so that one row == one calendar day.
+  date      DateTime @db.Date
+  count     Int      @default(1)
+  note      String?
+  createdAt DateTime @default(now())
+
+  @@unique([habitId, date])
+  @@index([userId, date])
+  @@map("habit_log")
+}
+
+// ---------------------------------------------------------------------------
+// Study
+// ---------------------------------------------------------------------------
+
+model StudySession {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  subject         String
+  topic           String?
+  durationMinutes Int
+  notes           String?
+  sessionDate     DateTime
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([userId, sessionDate])
+  @@index([userId, subject])
+  @@map("study_session")
+}
+
+// ---------------------------------------------------------------------------
+// Fitness
+// ---------------------------------------------------------------------------
+
+model Workout {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name            String
+  workoutDate     DateTime
+  durationMinutes Int?
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  exercises WorkoutExercise[]
+
+  @@index([userId, workoutDate])
+  @@map("workout")
+}
+
+model WorkoutExercise {
+  id              String  @id @default(cuid())
+  workoutId       String
+  workout         Workout @relation(fields: [workoutId], references: [id], onDelete: Cascade)
+  name            String
+  sets            Int     @default(1)
+  reps            Int?
+  /// Weight in kilograms.
+  weight          Float?
+  durationSeconds Int?
+  notes           String?
+  /// Display order inside the workout.
+  position        Int     @default(0)
+
+  @@index([workoutId])
+  @@map("workout_exercise")
+}
+
+// ---------------------------------------------------------------------------
+// Calendar + Journal
+// ---------------------------------------------------------------------------
+
+model CalendarEvent {
+  id          String            @id @default(cuid())
+  userId      String
+  user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  startTime   DateTime
+  endTime     DateTime?
+  type        CalendarEventType @default(OTHER)
+  location    String?
+  allDay      Boolean           @default(false)
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  @@index([userId, startTime])
+  @@map("calendar_event")
+}
+
+model JournalEntry {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String?
+  content   String
+  mood      Mood?
+  entryDate DateTime @db.Date
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, entryDate])
+  @@map("journal_entry")
+}
+
+// ---------------------------------------------------------------------------
+// Gamification
+// ---------------------------------------------------------------------------
+
+model XPEvent {
+  id        String      @id @default(cuid())
+  userId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      XPEventType
+  points    Int
+  reason    String
+  /// Stable identity of the underlying action, e.g. `TASK_COMPLETED:<taskId>`.
+  /// Unique per user so an action can never be rewarded twice.
+  dedupeKey String
+  createdAt DateTime    @default(now())
+
+  @@unique([userId, dedupeKey])
+  @@index([userId, createdAt])
+  @@map("xp_event")
+}
+
+model UserAchievement {
+  id             String   @id @default(cuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementKey String
+  unlockedAt     DateTime @default(now())
+
+  @@unique([userId, achievementKey])
+  @@index([userId])
+  @@map("user_achievement")
+}

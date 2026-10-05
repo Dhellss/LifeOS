@@ -1,0 +1,15 @@
+# LifeOS is a private workspace: only the landing page is worth indexing.
+User-agent: *
+Allow: /$
+Disallow: /dashboard
+Disallow: /tasks
+Disallow: /projects
+Disallow: /habits
+Disallow: /study
+Disallow: /fitness
+Disallow: /calendar
+Disallow: /journal
+Disallow: /analytics
+Disallow: /achievements
+Disallow: /settings
+Disallow: /api/

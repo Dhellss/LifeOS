@@ -1,0 +1,47 @@
+# Local development stack: the Next.js app plus its PostgreSQL database.
+#
+#   docker compose up -d        start both services
+#   docker compose logs -f app  follow application logs
+#   docker compose down -v      stop and discard the database volume
+
+services:
+  db:
+    image: postgres:17-alpine
+    container_name: lifeos-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-lifeos}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-lifeos}
+      POSTGRES_DB: ${POSTGRES_DB:-lifeos}
+    ports:
+      - '5432:5432'
+    volumes:
+      - lifeos-db-data:/var/lib/postgresql/data
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-lifeos} -d ${POSTGRES_DB:-lifeos}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: lifeos-app
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # `db` is the compose service name, resolvable on the default network.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-lifeos}:${POSTGRES_PASSWORD:-lifeos}@db:5432/${POSTGRES_DB:-lifeos}?schema=public
+      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?BETTER_AUTH_SECRET must be set - generate one with: openssl rand -base64 32}
+      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:3000}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-http://localhost:3000}
+      NODE_ENV: production
+    ports:
+      - '3000:3000'
+
+volumes:
+  lifeos-db-data:

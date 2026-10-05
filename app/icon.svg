@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="LifeOS">
+  <rect width="32" height="32" rx="8" fill="#4f46e5" />
+  <path
+    d="M16 7.5 22.5 11.25v7.5L16 22.5 9.5 18.75v-7.5L16 7.5Z"
+    fill="none"
+    stroke="#ffffff"
+    stroke-width="2.25"
+    stroke-linejoin="round"
+  />
+</svg>
